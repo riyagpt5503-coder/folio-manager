@@ -86,6 +86,9 @@ async def compute_portfolio(req: PortfolioRequest):
 
     data_as_of = prices.index[-1]
     data_as_of_str = data_as_of.strftime("%Y-%m-%d") if hasattr(data_as_of, "strftime") else str(data_as_of)
+    data_from = prices.index[0]
+    data_from_str = data_from.strftime("%Y-%m-%d") if hasattr(data_from, "strftime") else str(data_from)
+    effective_years = (data_as_of - data_from).days / 365.25
 
     return PortfolioResponse(
         risk_profile=req.risk_profile,
@@ -98,7 +101,9 @@ async def compute_portfolio(req: PortfolioRequest):
         ),
         meta=PortfolioMeta(
             data_as_of=data_as_of_str,
+            data_from=data_from_str,
             lookback_years=settings.lookback_years,
+            effective_years=round(effective_years, 2),
             risk_free_rate=settings.risk_free_rate,
             cache_age_seconds=round(market_data_cache.cache_age_seconds, 1),
         ),

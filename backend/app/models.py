@@ -30,7 +30,9 @@ class PortfolioStats(BaseModel):
 
 class PortfolioMeta(BaseModel):
     data_as_of: str
+    data_from: str
     lookback_years: int
+    effective_years: float
     risk_free_rate: float
     cache_age_seconds: float
     disclaimer: str = (

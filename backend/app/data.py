@@ -123,6 +123,15 @@ def _fetch_and_clean_prices() -> pd.DataFrame:
     if still_missing:
         raise DataFetchError(f"Unresolvable gaps in data for ticker(s): {', '.join(still_missing)}")
 
+    first_valid_by_ticker = {s.name: s.first_valid_index() for s in series_list}
+    logger.info(
+        "Cleaned price matrix: index[0]=%s index[-1]=%s len=%d first_valid_index_by_ticker=%s",
+        prices.index[0],
+        prices.index[-1],
+        len(prices),
+        first_valid_by_ticker,
+    )
+
     return prices
 
 
