@@ -16,18 +16,19 @@ _WEIGHT_TOLERANCE = 1e-4
 _DEFAULT_RISK_PROFILE = RiskProfile.moderate
 
 
-def _detect_binding_constraints(weights: dict[str, float]) -> list[dict]:
+def _detect_binding_constraints(risk_profile: RiskProfile, weights: dict[str, float]) -> list[dict]:
     """Compares the solved weights against the configured bounds directly
     (tolerance-based boundary check) rather than reading solver dual
     variables, which pypfopt/cvxpy don't reliably expose across solvers."""
+    max_weight = settings.max_weight_by_profile[risk_profile.value]
     binding: list[dict] = []
 
     for ticker, weight in weights.items():
         if weight <= _WEIGHT_TOLERANCE:
             binding.append({"constraint": "weight_lower_bound", "scope": ticker, "bound": 0.0, "value": round(weight, 6)})
-        elif weight >= settings.max_weight - _WEIGHT_TOLERANCE:
+        elif weight >= max_weight - _WEIGHT_TOLERANCE:
             binding.append(
-                {"constraint": "max_weight", "scope": ticker, "bound": settings.max_weight, "value": round(weight, 6)}
+                {"constraint": "max_weight", "scope": ticker, "bound": max_weight, "value": round(weight, 6)}
             )
 
     sector_totals: dict[str, float] = {}
@@ -58,7 +59,7 @@ class _LastSolve:
     def record(self, risk_profile: RiskProfile, weights: dict[str, float]) -> None:
         self.risk_profile = risk_profile
         self.weights = dict(weights)
-        self.binding_constraints = _detect_binding_constraints(weights)
+        self.binding_constraints = _detect_binding_constraints(risk_profile, weights)
 
 
 last_solve = _LastSolve()
@@ -68,10 +69,11 @@ def ensure_last_solve() -> _LastSolve:
     """Guarantees there's a solve to report on. If /api/portfolio hasn't been
     called yet this process, compute a default one so /api/risk is never empty."""
     if last_solve.risk_profile is None:
-        prices, mu, cov = market_data_cache.get()
+        prices, mu_by_profile, cov = market_data_cache.get()
         surviving, _ = gates.apply_gates(
             market_data_cache.nav_start_dates, market_data_cache.premium, as_of=prices.index[-1]
         )
+        mu = mu_by_profile[_DEFAULT_RISK_PROFILE.value]
         weights, _ = solve_portfolio(_DEFAULT_RISK_PROFILE, mu.loc[surviving], cov.loc[surviving, surviving])
         last_solve.record(_DEFAULT_RISK_PROFILE, weights)
         logger.info("No prior solve found; computed a default '%s' solve for /api/risk", _DEFAULT_RISK_PROFILE.value)

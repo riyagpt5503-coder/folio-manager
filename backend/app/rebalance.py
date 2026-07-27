@@ -162,7 +162,8 @@ def compute_drift_and_orders(
 
 
 def compute_rebalance(risk_profile: RiskProfile) -> dict:
-    prices, mu, cov = market_data_cache.get()  # ensures the cache (incl. nav_prices_raw) is warm
+    prices, mu_by_profile, cov = market_data_cache.get()  # ensures the cache (incl. nav_prices_raw) is warm
+    mu = mu_by_profile[risk_profile.value]
 
     positions = db.list_positions()
     latest_nav, as_of_ts = _latest_nav_by_ticker()

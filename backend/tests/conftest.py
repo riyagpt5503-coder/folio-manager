@@ -39,7 +39,8 @@ def fixed_prices() -> pd.DataFrame:
 
 @pytest.fixture
 def mu_cov(monkeypatch, fixed_prices):
-    """mu/cov computed by the real data-layer pipeline, with the network fetch mocked out."""
+    """mu_by_profile/cov computed by the real data-layer pipeline, with the
+    network fetch mocked out. mu_by_profile has one Series per RiskProfile."""
     from app.data import MarketDataCache
 
     nav_start_dates = {ticker: fixed_prices.index[0] for ticker in fixed_prices.columns}
@@ -48,5 +49,5 @@ def mu_cov(monkeypatch, fixed_prices):
         lambda: (fixed_prices, fixed_prices.copy(), fixed_prices.copy(), nav_start_dates, []),
     )
     cache = MarketDataCache()
-    _, mu, cov = cache.get()
-    return mu, cov
+    _, mu_by_profile, cov = cache.get()
+    return mu_by_profile, cov

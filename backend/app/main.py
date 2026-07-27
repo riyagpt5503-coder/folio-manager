@@ -106,7 +106,7 @@ async def delete_position(lot_id: int):
 
 @app.get("/api/risk", response_model=RiskResponse)
 async def get_risk():
-    prices, mu, cov = market_data_cache.get()
+    prices, _, cov = market_data_cache.get()
     solve = risk.ensure_last_solve()
 
     corr = risk.correlation_matrix(cov).round(6)
@@ -133,7 +133,8 @@ async def get_rebalance(risk_profile: RiskProfile):
 
 @app.post("/api/portfolio", response_model=PortfolioResponse)
 async def compute_portfolio(req: PortfolioRequest):
-    prices, mu, cov = market_data_cache.get()
+    prices, mu_by_profile, cov = market_data_cache.get()
+    mu = mu_by_profile[req.risk_profile.value]
 
     surviving_tickers, excluded = gates.apply_gates(
         market_data_cache.nav_start_dates,
@@ -145,6 +146,9 @@ async def compute_portfolio(req: PortfolioRequest):
 
     weights, (expected_return, volatility, sharpe) = solve_portfolio(req.risk_profile, mu, cov)
     risk.last_solve.record(req.risk_profile, weights)
+
+    target_volatility = settings.target_volatility_by_profile[req.risk_profile.value]
+    achieved_volatility = volatility
 
     cash_weight = settings.cash_weight
     asset_weight = 1 - cash_weight
@@ -203,5 +207,7 @@ async def compute_portfolio(req: PortfolioRequest):
             cache_age_seconds=round(market_data_cache.cache_age_seconds, 1),
             failed_tickers=market_data_cache.failed_tickers,
             excluded=[ExcludedTicker(**e) for e in excluded],
+            target_volatility=round(target_volatility, 6),
+            achieved_volatility=round(achieved_volatility, 6),
         ),
     )

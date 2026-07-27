@@ -13,93 +13,66 @@ logger = logging.getLogger(__name__)
 WeightsAndPerformance = tuple[dict[str, float], tuple[float, float, float]]
 
 
-def _new_frontier(mu: pd.Series, cov: pd.DataFrame) -> EfficientFrontier:
-    ef = EfficientFrontier(mu, cov, weight_bounds=(0, settings.max_weight))
-    ef.add_objective(objective_functions.L2_reg, gamma=0.5)
+def _feasible_sector_lower(mu: pd.Series) -> dict[str, float]:
+    """Drop sector_lower entries for asset classes with no surviving tickers
+    in mu's index - otherwise the lower bound is infeasible (there's nothing
+    left to allocate to satisfy it)."""
+    surviving_classes = {ASSET_BY_TICKER[t]["asset_class"] for t in mu.index if t in ASSET_BY_TICKER}
+    feasible: dict[str, float] = {}
+    for asset_class, lower in settings.sector_lower.items():
+        if asset_class in surviving_classes:
+            feasible[asset_class] = lower
+        else:
+            logger.warning(
+                "Dropping sector_lower constraint for asset_class '%s' (%.4f): no surviving tickers after gates",
+                asset_class,
+                lower,
+            )
+    return feasible
+
+
+def _new_frontier(mu: pd.Series, cov: pd.DataFrame, max_weight: float, gamma: float) -> EfficientFrontier:
+    ef = EfficientFrontier(mu, cov, weight_bounds=(0, max_weight))
+    ef.add_objective(objective_functions.L2_reg, gamma=gamma)
     ef.add_sector_constraints(
         sector_mapper={t: a["asset_class"] for t, a in ASSET_BY_TICKER.items()},
-        sector_lower=settings.sector_lower,
+        sector_lower=_feasible_sector_lower(mu),
         sector_upper=settings.sector_upper,
     )
     return ef
 
 
-def _solve_min_volatility(mu: pd.Series, cov: pd.DataFrame) -> WeightsAndPerformance:
-    ef = _new_frontier(mu, cov)
-    ef.min_volatility()
-    weights = ef.clean_weights()
-    performance = ef.portfolio_performance(risk_free_rate=settings.risk_free_rate)
-    return weights, performance
-
-
-def _solve_aggressive(mu: pd.Series, cov: pd.DataFrame, min_vol_perf: tuple[float, float, float]) -> WeightsAndPerformance:
-    # max_sharpe() is incompatible with the added sector constraints in PyPortfolioOpt,
-    # so the aggressive profile targets a volatility multiple of the min-volatility portfolio instead.
-    v_target = min_vol_perf[1] * 2.0
-    ef = _new_frontier(mu, cov)
-    ef.efficient_risk(target_volatility=v_target)
-    weights = ef.clean_weights()
-    performance = ef.portfolio_performance(risk_free_rate=settings.risk_free_rate)
-    return weights, performance
-
-
-def _solve_moderate(
-    mu: pd.Series,
-    cov: pd.DataFrame,
-    min_vol_perf: tuple[float, float, float],
-    aggressive_perf: tuple[float, float, float],
-    min_vol_weights: dict[str, float],
-    aggressive_weights: dict[str, float],
-) -> WeightsAndPerformance:
-    v_min = min_vol_perf[1]
-    v_max = aggressive_perf[1]
-    v_target = v_min + 0.5 * (v_max - v_min)
-    v_target = max(v_target, v_min * 1.05)
-
-    try:
-        ef = _new_frontier(mu, cov)
-        ef.efficient_risk(target_volatility=v_target)
-        weights = ef.clean_weights()
-        performance = ef.portfolio_performance(risk_free_rate=settings.risk_free_rate)
-        return weights, performance
-    except Exception as exc:  # noqa: BLE001 - fall back below
-        logger.warning("efficient_risk(target_volatility=%.4f) failed: %s; trying efficient_return fallback", v_target, exc)
-
-    r_min = min_vol_perf[0]
-    r_max = aggressive_perf[0]
-    r_target = r_min + 0.5 * (r_max - r_min)
-    try:
-        ef = _new_frontier(mu, cov)
-        ef.efficient_return(target_return=r_target)
-        weights = ef.clean_weights()
-        performance = ef.portfolio_performance(risk_free_rate=settings.risk_free_rate)
-        return weights, performance
-    except Exception as exc:  # noqa: BLE001 - final fallback below
-        logger.warning("efficient_return(target_return=%.4f) failed: %s; blending weight vectors", r_target, exc)
-
-    tickers = mu.index
-    blended = {t: 0.5 * min_vol_weights.get(t, 0.0) + 0.5 * aggressive_weights.get(t, 0.0) for t in tickers}
-    blended_return = sum(blended[t] * mu[t] for t in tickers)
-    blended_variance = sum(
-        blended[t1] * blended[t2] * cov.loc[t1, t2] for t1 in tickers for t2 in tickers
-    )
-    blended_vol = blended_variance**0.5
-    blended_sharpe = (blended_return - settings.risk_free_rate) / blended_vol if blended_vol else 0.0
-    return blended, (blended_return, blended_vol, blended_sharpe)
-
-
 def solve_portfolio(risk_profile: RiskProfile, mu: pd.Series, cov: pd.DataFrame) -> WeightsAndPerformance:
+    max_weight = settings.max_weight_by_profile[risk_profile.value]
+    gamma = settings.l2_gamma_by_profile[risk_profile.value]
+    target_volatility = settings.target_volatility_by_profile[risk_profile.value]
+
     try:
-        min_vol_weights, min_vol_perf = _solve_min_volatility(mu, cov)
-        if risk_profile == RiskProfile.conservative:
-            return min_vol_weights, min_vol_perf
+        try:
+            ef = _new_frontier(mu, cov, max_weight, gamma)
+            ef.efficient_risk(target_volatility=target_volatility)
+        except Exception as exc:  # noqa: BLE001 - target infeasible (below the achievable minimum); fall back
+            logger.warning(
+                "efficient_risk(target_volatility=%.4f) infeasible for '%s': %s; falling back to min_volatility()",
+                target_volatility,
+                risk_profile.value,
+                exc,
+            )
+            ef = _new_frontier(mu, cov, max_weight, gamma)
+            ef.min_volatility()
 
-        aggressive_weights, aggressive_perf = _solve_aggressive(mu, cov, min_vol_perf)
-        if risk_profile == RiskProfile.aggressive:
-            return aggressive_weights, aggressive_perf
+        weights = ef.clean_weights()
+        performance = ef.portfolio_performance(risk_free_rate=settings.risk_free_rate)
+        achieved_volatility = performance[1]
 
-        return _solve_moderate(
-            mu, cov, min_vol_perf, aggressive_perf, min_vol_weights, aggressive_weights
-        )
+        if abs(achieved_volatility - target_volatility) > 1e-4:
+            logger.info(
+                "Risk profile '%s': target_volatility=%.4f achieved_volatility=%.4f",
+                risk_profile.value,
+                target_volatility,
+                achieved_volatility,
+            )
+
+        return weights, performance
     except Exception as exc:  # noqa: BLE001 - wrap into our own error type
         raise OptimizationError(f"Optimization failed for risk profile '{risk_profile.value}': {exc}") from exc

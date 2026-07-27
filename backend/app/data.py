@@ -8,8 +8,9 @@ from pypfopt import expected_returns, risk_models
 from app import metrics as metrics_module
 from app.config import settings
 from app.errors import DataFetchError
+from app.models import RiskProfile
 from app.nav import fetch_nav_series, load_instruments
-from app.returns import implied_returns, policy_weights
+from app.returns import implied_returns, policy_weights_for_profile
 from app.universe import TICKERS
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ class MarketDataCache:
         self._yahoo_prices: pd.DataFrame | None = None
         self._premium: pd.DataFrame | None = None
         self._nav_start_dates: dict[str, pd.Timestamp] = {}
-        self._mu: pd.Series | None = None
+        self._mu_by_profile: dict[str, pd.Series] = {}
         self._cov: pd.DataFrame | None = None
         self._metrics: dict[str, dict] = {}
         self._fetched_at: float | None = None
@@ -71,12 +72,14 @@ class MarketDataCache:
     def metrics(self) -> dict[str, dict]:
         return self._metrics
 
-    def get(self) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
-        """Returns (nav_prices, mu, cov) - NAV is the primary series driving both."""
+    def get(self) -> tuple[pd.DataFrame, dict[str, pd.Series], pd.DataFrame]:
+        """Returns (nav_prices, mu_by_profile, cov) - NAV is the primary series
+        driving both. mu_by_profile has one entry per RiskProfile since each
+        profile's implied returns derive from its own policy weights."""
         ttl_seconds = settings.cache_ttl_minutes * 60
         if self._nav_prices is None or self.cache_age_seconds > ttl_seconds:
             self._refresh()
-        return self._nav_prices, self._mu, self._cov
+        return self._nav_prices, self._mu_by_profile, self._cov
 
     def _refresh(self) -> None:
         nav_prices, nav_prices_raw, yahoo_prices, nav_start_dates, failed_tickers = _fetch_prices_with_retry()
@@ -89,10 +92,15 @@ class MarketDataCache:
         self._cov = risk_models.CovarianceShrinkage(nav_prices).ledoit_wolf()
 
         if settings.return_model == "historical":
-            self._mu = expected_returns.mean_historical_return(nav_prices)
+            historical_mu = expected_returns.mean_historical_return(nav_prices)
+            self._mu_by_profile = {profile.value: historical_mu for profile in RiskProfile}
         else:
-            w_policy = policy_weights(list(nav_prices.columns))
-            self._mu = implied_returns(self._cov, w_policy)
+            self._mu_by_profile = {
+                profile.value: implied_returns(
+                    self._cov, policy_weights_for_profile(profile, list(nav_prices.columns))
+                )
+                for profile in RiskProfile
+            }
 
         self._metrics = metrics_module.compute_metrics(nav_prices_raw)
         self._fetched_at = time.time()

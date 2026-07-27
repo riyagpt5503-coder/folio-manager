@@ -43,6 +43,8 @@ class PortfolioMeta(BaseModel):
     cache_age_seconds: float
     failed_tickers: list[str]
     excluded: list[ExcludedTicker]
+    target_volatility: float
+    achieved_volatility: float
     disclaimer: str = (
         "Educational tool based on historical market data; not financial advice."
     )
