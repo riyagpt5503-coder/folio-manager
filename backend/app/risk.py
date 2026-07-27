@@ -8,46 +8,10 @@ from app.config import settings
 from app.data import market_data_cache
 from app.models import RiskProfile
 from app.optimizer import solve_portfolio
-from app.universe import ASSET_BY_TICKER
 
 logger = logging.getLogger(__name__)
 
-_WEIGHT_TOLERANCE = 1e-4
 _DEFAULT_RISK_PROFILE = RiskProfile.moderate
-
-
-def _detect_binding_constraints(risk_profile: RiskProfile, weights: dict[str, float]) -> list[dict]:
-    """Compares the solved weights against the configured bounds directly
-    (tolerance-based boundary check) rather than reading solver dual
-    variables, which pypfopt/cvxpy don't reliably expose across solvers."""
-    max_weight = settings.max_weight_by_profile[risk_profile.value]
-    binding: list[dict] = []
-
-    for ticker, weight in weights.items():
-        if weight <= _WEIGHT_TOLERANCE:
-            binding.append({"constraint": "weight_lower_bound", "scope": ticker, "bound": 0.0, "value": round(weight, 6)})
-        elif weight >= max_weight - _WEIGHT_TOLERANCE:
-            binding.append(
-                {"constraint": "max_weight", "scope": ticker, "bound": max_weight, "value": round(weight, 6)}
-            )
-
-    sector_totals: dict[str, float] = {}
-    for ticker, weight in weights.items():
-        sector = ASSET_BY_TICKER.get(ticker, {}).get("asset_class")
-        if sector:
-            sector_totals[sector] = sector_totals.get(sector, 0.0) + weight
-
-    for sector, lower in settings.sector_lower.items():
-        total = sector_totals.get(sector, 0.0)
-        if total <= lower + _WEIGHT_TOLERANCE:
-            binding.append({"constraint": "sector_lower", "scope": sector, "bound": lower, "value": round(total, 6)})
-
-    for sector, upper in settings.sector_upper.items():
-        total = sector_totals.get(sector, 0.0)
-        if total >= upper - _WEIGHT_TOLERANCE:
-            binding.append({"constraint": "sector_upper", "scope": sector, "bound": upper, "value": round(total, 6)})
-
-    return binding
 
 
 class _LastSolve:
@@ -56,10 +20,10 @@ class _LastSolve:
         self.weights: dict[str, float] = {}
         self.binding_constraints: list[dict] = []
 
-    def record(self, risk_profile: RiskProfile, weights: dict[str, float]) -> None:
+    def record(self, risk_profile: RiskProfile, weights: dict[str, float], binding_constraints: list[dict]) -> None:
         self.risk_profile = risk_profile
         self.weights = dict(weights)
-        self.binding_constraints = _detect_binding_constraints(risk_profile, weights)
+        self.binding_constraints = binding_constraints
 
 
 last_solve = _LastSolve()
@@ -74,8 +38,10 @@ def ensure_last_solve() -> _LastSolve:
             market_data_cache.nav_start_dates, market_data_cache.premium, as_of=prices.index[-1]
         )
         mu = mu_by_profile[_DEFAULT_RISK_PROFILE.value]
-        weights, _ = solve_portfolio(_DEFAULT_RISK_PROFILE, mu.loc[surviving], cov.loc[surviving, surviving])
-        last_solve.record(_DEFAULT_RISK_PROFILE, weights)
+        weights, _, binding_constraints = solve_portfolio(
+            _DEFAULT_RISK_PROFILE, mu.loc[surviving], cov.loc[surviving, surviving]
+        )
+        last_solve.record(_DEFAULT_RISK_PROFILE, weights, binding_constraints)
         logger.info("No prior solve found; computed a default '%s' solve for /api/risk", _DEFAULT_RISK_PROFILE.value)
     return last_solve
 

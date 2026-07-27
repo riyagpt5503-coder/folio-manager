@@ -144,8 +144,8 @@ async def compute_portfolio(req: PortfolioRequest):
     mu = mu.loc[surviving_tickers]
     cov = cov.loc[surviving_tickers, surviving_tickers]
 
-    weights, (expected_return, volatility, sharpe) = solve_portfolio(req.risk_profile, mu, cov)
-    risk.last_solve.record(req.risk_profile, weights)
+    weights, (expected_return, volatility, sharpe), binding_constraints = solve_portfolio(req.risk_profile, mu, cov)
+    risk.last_solve.record(req.risk_profile, weights, binding_constraints)
 
     target_volatility = settings.target_volatility_by_profile[req.risk_profile.value]
     achieved_volatility = volatility

@@ -24,6 +24,6 @@ def test_policy_portfolio_return_exceeds_risk_free_rate(mu_cov, risk_profile):
 def test_sharpe_positive_for_all_profiles(mu_cov, risk_profile):
     mu_by_profile, cov = mu_cov
     mu = mu_by_profile[risk_profile.value]
-    _, performance = solve_portfolio(risk_profile, mu, cov)
+    _, performance, _ = solve_portfolio(risk_profile, mu, cov)
     sharpe = performance[2]
     assert sharpe > 0

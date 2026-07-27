@@ -38,7 +38,7 @@ def _target_weights(risk_profile: RiskProfile, prices: pd.DataFrame, mu: pd.Seri
     )
     mu = mu.loc[surviving]
     cov = cov.loc[surviving, surviving]
-    weights, _ = solve_portfolio(risk_profile, mu, cov)
+    weights, _, _ = solve_portfolio(risk_profile, mu, cov)
 
     asset_weight = 1 - settings.cash_weight
     return {ticker: w * asset_weight for ticker, w in weights.items()}

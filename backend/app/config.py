@@ -9,25 +9,42 @@ class Settings(BaseSettings):
     lookback_years: int = 5
     cash_weight: float = 0.0
     cash_return: float = 0.065
-    sector_lower: dict[str, float] = {"Indian Large-Cap Equity": 0.15}
-    sector_upper: dict[str, float] = {
-        "Gold": 0.15,
-        "Silver": 0.05,
-        "International Equity (US Tech)": 0.15,
-    }
     return_model: Literal["implied", "historical"] = "implied"
 
     # Per-profile constraint sets: tighter bounds + heavier L2 (diversification)
     # pressure for conservative, looser bounds + lighter L2 for aggressive.
-    max_weight_by_profile: dict[str, float] = {
-        "conservative": 0.20,
-        "moderate": 0.25,
-        "aggressive": 0.35,
+    # Each profile has a "default" per-ticker (min, max) bound plus overrides
+    # for specific tickers (e.g. conservative lets GILT5YBEES.NS go well above
+    # its default cap, since a 30%+ bonds policy can't fit under a flat 15%
+    # per-ticker ceiling).
+    weight_bounds_by_profile: dict[str, dict[str, tuple[float, float]]] = {
+        "conservative": {
+            "default": (0.0, 0.15),
+            "GILT5YBEES.NS": (0.0, 0.50),
+        },
+        "moderate": {
+            "default": (0.0, 0.25),
+            "GILT5YBEES.NS": (0.0, 0.35),
+        },
+        "aggressive": {
+            "default": (0.0, 0.35),
+            "GILT5YBEES.NS": (0.0, 0.10),
+        },
+    }
+    sector_lower_by_profile: dict[str, dict[str, float]] = {
+        "conservative": {"Indian Government Bonds": 0.30},
+        "moderate": {"Indian Large-Cap Equity": 0.15},
+        "aggressive": {"Gold": 0.05, "Indian Government Bonds": 0.02},
+    }
+    sector_upper_by_profile: dict[str, dict[str, float]] = {
+        "conservative": {"Gold": 0.15, "Silver": 0.05, "International Equity (US Tech)": 0.10},
+        "moderate": {"Gold": 0.15, "Silver": 0.05, "International Equity (US Tech)": 0.15},
+        "aggressive": {"Silver": 0.05, "International Equity (US Tech)": 0.20},
     }
     l2_gamma_by_profile: dict[str, float] = {
         "conservative": 0.5,
         "moderate": 0.3,
-        "aggressive": 0.1,
+        "aggressive": 0.03,
     }
     # Absolute annualized-vol target passed to efficient_risk() per profile.
     target_volatility_by_profile: dict[str, float] = {
