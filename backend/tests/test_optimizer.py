@@ -61,6 +61,17 @@ def test_solves_when_only_large_cap_ticker_is_gated_out(mu_cov, risk_profile):
     assert sum(weights.values()) == pytest.approx(1.0, abs=1e-4)
 
 
+@pytest.mark.parametrize("risk_profile", ALL_PROFILES)
+def test_no_nonzero_weight_below_min_position_size(mu_cov, risk_profile):
+    mu_by_profile, cov = mu_cov
+    weights, _, _ = solve_portfolio(risk_profile, mu_by_profile[risk_profile.value], cov)
+
+    for ticker, weight in weights.items():
+        assert weight == 0 or weight >= settings.min_position_size - 1e-6, (
+            f"{ticker} weight {weight} is a dust position below min_position_size"
+        )
+
+
 def test_volatility_ordering_across_profiles(mu_cov):
     # The achievable vol range across profiles is bounded by the instrument
     # universe itself, not just the constraint knobs: SILVERBEES.NS (the

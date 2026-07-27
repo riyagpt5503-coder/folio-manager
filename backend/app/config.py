@@ -37,9 +37,15 @@ class Settings(BaseSettings):
         "aggressive": {"Gold": 0.05, "Indian Government Bonds": 0.02},
     }
     sector_upper_by_profile: dict[str, dict[str, float]] = {
-        "conservative": {"Gold": 0.15, "Silver": 0.05, "International Equity (US Tech)": 0.10},
+        "conservative": {"Gold": 0.10, "Silver": 0.05, "International Equity (US Tech)": 0.10},
         "moderate": {"Gold": 0.15, "Silver": 0.05, "International Equity (US Tech)": 0.15},
-        "aggressive": {"Silver": 0.05, "International Equity (US Tech)": 0.20},
+        "aggressive": {
+            "Silver": 0.05,
+            "International Equity (US Tech)": 0.20,
+            "Indian IT Sector": 0.20,
+            "Indian Financials": 0.20,
+            "Indian Mid-Cap Equity": 0.25,
+        },
     }
     l2_gamma_by_profile: dict[str, float] = {
         "conservative": 0.5,
@@ -52,6 +58,9 @@ class Settings(BaseSettings):
         "moderate": 0.11,
         "aggressive": 0.16,
     }
+    # Any nonzero weight below this is dropped and the universe re-solved
+    # (see optimizer.solve_portfolio) rather than left as a dust position.
+    min_position_size: float = 0.02
 
     # Per-profile strategic policy allocation by asset_class, used as w_policy
     # for implied (reverse-optimized) equilibrium returns. Each sums to 1.0.

@@ -11,6 +11,7 @@ from app.universe import ASSET_BY_TICKER
 logger = logging.getLogger(__name__)
 
 _WEIGHT_TOLERANCE = 1e-4
+_MIN_POSITION_MAX_RETRIES = 2
 
 # (weights, (return, vol, sharpe), binding_constraints)
 SolveResult = tuple[dict[str, float], tuple[float, float, float], list[dict]]
@@ -90,26 +91,58 @@ def _detect_binding_constraints(
     return binding
 
 
-def solve_portfolio(risk_profile: RiskProfile, mu: pd.Series, cov: pd.DataFrame) -> SolveResult:
-    bounds_config = settings.weight_bounds_by_profile[risk_profile.value]
+def _solve_once(
+    mu: pd.Series,
+    cov: pd.DataFrame,
+    bounds_config: dict[str, tuple[float, float]],
+    gamma: float,
+    sector_lower: dict[str, float],
+    sector_upper: dict[str, float],
+    target_volatility: float,
+) -> tuple[dict[str, float], tuple[float, float, float]]:
     default_bounds = bounds_config["default"]
     weight_bounds = [bounds_config.get(ticker, default_bounds) for ticker in mu.index]
+    ef = _new_frontier(mu, cov, weight_bounds, gamma, sector_lower, sector_upper)
+    ef.efficient_risk(target_volatility=target_volatility)
+    weights = ef.clean_weights()
+    performance = ef.portfolio_performance(risk_free_rate=settings.risk_free_rate)
+    return weights, performance
 
+
+def solve_portfolio(risk_profile: RiskProfile, mu: pd.Series, cov: pd.DataFrame) -> SolveResult:
+    bounds_config = settings.weight_bounds_by_profile[risk_profile.value]
     gamma = settings.l2_gamma_by_profile[risk_profile.value]
     target_volatility = settings.target_volatility_by_profile[risk_profile.value]
     sector_lower = settings.sector_lower_by_profile[risk_profile.value]
     sector_upper = settings.sector_upper_by_profile[risk_profile.value]
 
     try:
-        ef = _new_frontier(mu, cov, weight_bounds, gamma, sector_lower, sector_upper)
         # No fallback here on purpose: a silent fallback to min_volatility()
         # previously masked a real misconfiguration (conservative's bond-heavy
         # policy didn't fit under its old flat max_weight), so an infeasible
         # target now surfaces as a genuine OptimizationError instead.
-        ef.efficient_risk(target_volatility=target_volatility)
+        for attempt in range(_MIN_POSITION_MAX_RETRIES + 1):
+            weights, performance = _solve_once(mu, cov, bounds_config, gamma, sector_lower, sector_upper, target_volatility)
 
-        weights = ef.clean_weights()
-        performance = ef.portfolio_performance(risk_free_rate=settings.risk_free_rate)
+            undersized = [t for t, w in weights.items() if 0 < w < settings.min_position_size]
+            if not undersized or attempt == _MIN_POSITION_MAX_RETRIES:
+                break
+
+            # Drop and re-solve on the reduced universe rather than
+            # zero-and-renormalize, which would silently violate the sector
+            # and per-ticker bounds the remaining weights were solved under.
+            logger.info(
+                "Risk profile '%s': dropping undersized position(s) %s (< %.4f) and re-solving (attempt %d/%d)",
+                risk_profile.value,
+                undersized,
+                settings.min_position_size,
+                attempt + 1,
+                _MIN_POSITION_MAX_RETRIES,
+            )
+            remaining = [t for t in mu.index if t not in undersized]
+            mu = mu.loc[remaining]
+            cov = cov.loc[remaining, remaining]
+
         achieved_volatility = performance[1]
 
         if abs(achieved_volatility - target_volatility) > 1e-4:
