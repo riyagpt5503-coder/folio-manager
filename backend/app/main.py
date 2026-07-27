@@ -2,21 +2,33 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app import db, gates, risk
 from app.config import settings
 from app.data import market_data_cache
 from app.errors import DataFetchError, OptimizationError
 from app.models import (
     Allocation,
+    BindingConstraint,
+    ExcludedTicker,
+    MetricsResponse,
     PortfolioMeta,
     PortfolioRequest,
     PortfolioResponse,
     PortfolioStats,
+    Position,
+    PositionCreate,
+    RebalanceResponse,
+    RiskContribution,
+    RiskProfile,
+    RiskResponse,
+    TickerMetrics,
 )
 from app.optimizer import solve_portfolio
+from app.rebalance import compute_rebalance
 from app.universe import ASSET_BY_TICKER
 
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    db.init_db()
     try:
         market_data_cache.get()
         logger.info("Startup warm-up fetch succeeded")
@@ -64,10 +77,81 @@ async def health():
     }
 
 
+@app.get("/api/metrics", response_model=MetricsResponse)
+async def get_metrics():
+    prices, _, _ = market_data_cache.get()
+    return MetricsResponse(
+        as_of=prices.index[-1].strftime("%Y-%m-%d"),
+        cache_age_seconds=round(market_data_cache.cache_age_seconds, 1),
+        metrics={ticker: TickerMetrics(**m) for ticker, m in market_data_cache.metrics.items()},
+    )
+
+
+@app.post("/api/positions", response_model=Position, status_code=201)
+async def create_position(position: PositionCreate):
+    row = db.create_position(position.symbol, position.qty, position.buy_date.isoformat(), position.buy_price)
+    return Position(**dict(row))
+
+
+@app.get("/api/positions", response_model=list[Position])
+async def list_positions():
+    return [Position(**dict(row)) for row in db.list_positions()]
+
+
+@app.delete("/api/positions/{lot_id}", status_code=204)
+async def delete_position(lot_id: int):
+    if not db.delete_position(lot_id):
+        raise HTTPException(status_code=404, detail=f"Position {lot_id} not found")
+
+
+@app.get("/api/risk", response_model=RiskResponse)
+async def get_risk():
+    prices, mu, cov = market_data_cache.get()
+    solve = risk.ensure_last_solve()
+
+    corr = risk.correlation_matrix(cov).round(6)
+    contributions = risk.risk_contributions(solve.weights, cov)
+    max_dd = risk.portfolio_max_drawdown(solve.weights, prices)
+
+    return RiskResponse(
+        as_of=prices.index[-1].strftime("%Y-%m-%d"),
+        risk_profile=solve.risk_profile,
+        correlation_matrix=corr.to_dict(),
+        risk_contributions=[
+            RiskContribution(ticker=t, weight=round(solve.weights[t], 6), percent_contribution=round(pct, 6))
+            for t, pct in sorted(contributions.items(), key=lambda kv: -kv[1])
+        ],
+        portfolio_max_drawdown=round(max_dd, 6),
+        binding_constraints=[BindingConstraint(**b) for b in solve.binding_constraints],
+    )
+
+
+@app.get("/api/rebalance", response_model=RebalanceResponse)
+async def get_rebalance(risk_profile: RiskProfile):
+    return RebalanceResponse(**compute_rebalance(risk_profile))
+
+
 @app.post("/api/portfolio", response_model=PortfolioResponse)
 async def compute_portfolio(req: PortfolioRequest):
     prices, mu, cov = market_data_cache.get()
+
+    surviving_tickers, excluded = gates.apply_gates(
+        market_data_cache.nav_start_dates,
+        market_data_cache.premium,
+        as_of=prices.index[-1],
+    )
+    mu = mu.loc[surviving_tickers]
+    cov = cov.loc[surviving_tickers, surviving_tickers]
+
     weights, (expected_return, volatility, sharpe) = solve_portfolio(req.risk_profile, mu, cov)
+    risk.last_solve.record(req.risk_profile, weights)
+
+    cash_weight = settings.cash_weight
+    asset_weight = 1 - cash_weight
+    weights = {ticker: weight * asset_weight for ticker, weight in weights.items()}
+    expected_return = expected_return * asset_weight + cash_weight * settings.cash_return
+    volatility = volatility * asset_weight
+    sharpe = (expected_return - settings.risk_free_rate) / volatility if volatility else 0.0
 
     allocations = []
     for ticker, weight in sorted(weights.items(), key=lambda kv: kv[1], reverse=True):
@@ -81,6 +165,17 @@ async def compute_portfolio(req: PortfolioRequest):
                 asset_class=asset["asset_class"],
                 weight=round(weight, 6),
                 amount=round(weight * req.amount, 2),
+            )
+        )
+
+    if cash_weight > 0:
+        allocations.append(
+            Allocation(
+                ticker="CASH",
+                name="Cash",
+                asset_class="Cash / Money Market",
+                weight=round(cash_weight, 6),
+                amount=round(cash_weight * req.amount, 2),
             )
         )
 
@@ -106,5 +201,7 @@ async def compute_portfolio(req: PortfolioRequest):
             effective_years=round(effective_years, 2),
             risk_free_rate=settings.risk_free_rate,
             cache_age_seconds=round(market_data_cache.cache_age_seconds, 1),
+            failed_tickers=market_data_cache.failed_tickers,
+            excluded=[ExcludedTicker(**e) for e in excluded],
         ),
     )

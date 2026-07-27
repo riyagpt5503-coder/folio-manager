@@ -5,7 +5,6 @@ ASSET_UNIVERSE = [
     {"ticker": "ITBEES.NS", "name": "Nippon India ETF IT BeES", "asset_class": "Indian IT Sector"},
     {"ticker": "MON100.NS", "name": "Motilal Oswal Nasdaq 100 ETF", "asset_class": "International Equity (US Tech)"},
     {"ticker": "GILT5YBEES.NS", "name": "Nippon India ETF Nifty 5yr Benchmark G-Sec", "asset_class": "Indian Government Bonds"},
-    {"ticker": "LIQUIDBEES.NS", "name": "Nippon India ETF Liquid BeES", "asset_class": "Cash / Money Market"},
     {"ticker": "GOLDBEES.NS", "name": "Nippon India ETF Gold BeES", "asset_class": "Gold"},
     {"ticker": "SILVERBEES.NS", "name": "Nippon India ETF Silver BeES", "asset_class": "Silver"},
 ]

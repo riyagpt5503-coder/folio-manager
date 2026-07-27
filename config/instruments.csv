@@ -1,0 +1,9 @@
+nse_symbol,amfi_code,asset_class,name
+NIFTYBEES.NS,140084,Indian Large-Cap Equity,Nippon India ETF Nifty BeES
+JUNIORBEES.NS,140085,Indian Mid-Cap Equity,Nippon India ETF Junior BeES
+BANKBEES.NS,140087,Indian Financials,Nippon India ETF Bank BeES
+ITBEES.NS,148408,Indian IT Sector,Nippon India ETF IT BeES
+MON100.NS,114984,International Equity (US Tech),Motilal Oswal Nasdaq 100 ETF
+GILT5YBEES.NS,148800,Indian Government Bonds,Nippon India ETF Nifty 5yr Benchmark G-Sec
+GOLDBEES.NS,140088,Gold,Nippon India ETF Gold BeES
+SILVERBEES.NS,149758,Silver,Nippon India ETF Silver BeES
